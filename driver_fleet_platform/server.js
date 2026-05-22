@@ -10,6 +10,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/driver_fleet';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 
 // Middleware
 app.use(cors());
@@ -65,11 +66,83 @@ const driverSchema = new mongoose.Schema({
 
 const Driver = mongoose.model('Driver', driverSchema);
 
+// Simple session storage (in production, use proper session management)
+const sessions = new Map();
+
 // Routes
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Server is running' });
+});
+
+// Admin login
+app.post('/api/admin/login', (req, res) => {
+  const { password } = req.body;
+  
+  if (password === ADMIN_PASSWORD) {
+    const sessionId = Math.random().toString(36).substring(2);
+    sessions.set(sessionId, { authenticated: true, timestamp: Date.now() });
+    
+    res.json({ 
+      success: true, 
+      message: 'تم تسجيل الدخول بنجاح',
+      sessionId 
+    });
+  } else {
+    res.status(401).json({ 
+      success: false, 
+      message: 'كلمة المرور غير صحيحة' 
+    });
+  }
+});
+
+// Verify session middleware
+const verifySession = (req, res, next) => {
+  const sessionId = req.headers['x-session-id'];
+  
+  if (!sessionId || !sessions.has(sessionId)) {
+    return res.status(401).json({ 
+      success: false, 
+      message: 'غير مصرح - يرجى تسجيل الدخول' 
+    });
+  }
+  
+  const session = sessions.get(sessionId);
+  // Check if session is older than 24 hours
+  if (Date.now() - session.timestamp > 24 * 60 * 60 * 1000) {
+    sessions.delete(sessionId);
+    return res.status(401).json({ 
+      success: false, 
+      message: 'انتهت الجلسة - يرجى تسجيل الدخول مرة أخرى' 
+    });
+  }
+  
+  next();
+};
+
+// Get dashboard statistics
+app.get('/api/admin/stats', verifySession, async (req, res) => {
+  try {
+    const totalDrivers = await Driver.countDocuments();
+    const pendingCount = await Driver.countDocuments({ status: 'pending' });
+    const underReviewCount = await Driver.countDocuments({ status: 'under_review' });
+    const approvedCount = await Driver.countDocuments({ status: 'approved' });
+    const rejectedCount = await Driver.countDocuments({ status: 'rejected' });
+    
+    res.json({
+      success: true,
+      data: {
+        totalDrivers,
+        pendingCount,
+        underReviewCount,
+        approvedCount,
+        rejectedCount
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 });
 
 // Register driver
@@ -137,13 +210,58 @@ app.post('/api/drivers/register', async (req, res) => {
 });
 
 // Get all drivers (for admin)
-app.get('/api/drivers', async (req, res) => {
+app.get('/api/drivers', verifySession, async (req, res) => {
   try {
     const drivers = await Driver.find().sort({ createdAt: -1 });
     res.json({ success: true, data: drivers });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
+});
+
+// Update driver status
+app.put('/api/drivers/:id/status', verifySession, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    
+    if (!['pending', 'under_review', 'approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'حالة غير صالحة' 
+      });
+    }
+    
+    const driver = await Driver.findByIdAndUpdate(
+      id,
+      { status },
+      { new: true, runValidators: true }
+    );
+    
+    if (!driver) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'السائق غير موجود' 
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'تم تحديث الحالة بنجاح',
+      data: driver 
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Logout
+app.post('/api/admin/logout', (req, res) => {
+  const sessionId = req.headers['x-session-id'];
+  if (sessionId && sessions.has(sessionId)) {
+    sessions.delete(sessionId);
+  }
+  res.json({ success: true, message: 'تم تسجيل الخروج بنجاح' });
 });
 
 // Serve static files in production

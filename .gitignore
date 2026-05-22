@@ -1,19 +1,26 @@
 ```
 # Dependencies
 node_modules/
+package-lock.json
 
 # Environment
 .env
 .env.local
-*.env.*
-
-# Logs and temp files
-*.log
-*.tmp
+.env.*
 
 # Editors
 .vscode/
 .idea/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Build artifacts
+dist/
+build/
+target/
 
 # Python
 __pycache__/
@@ -23,5 +30,5 @@ __pycache__/
 .Python
 venv/
 .venv/
-.env/
+.env
 ```
